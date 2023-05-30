@@ -8,6 +8,8 @@
 #include "common/library.h"
 #include "common/io/io.h"
 #include "common/thread.h"
+#include "3rdparty/fractional_scale_v1_client_protocol.h"
+
 #include <wayland-client.h>
 #include <sys/socket.h>
 #include <assert.h>
@@ -16,11 +18,13 @@ typedef struct WaylandData
 {
     FFDisplayServerResult* result;
     FF_LIBRARY_SYMBOL(wl_proxy_marshal_constructor_versioned)
+    FF_LIBRARY_SYMBOL(wl_proxy_marshal_flags)
     FF_LIBRARY_SYMBOL(wl_proxy_add_listener)
     FF_LIBRARY_SYMBOL(wl_proxy_destroy)
     FF_LIBRARY_SYMBOL(wl_display_roundtrip)
     struct wl_display* display;
     const struct wl_interface* ffwl_output_interface;
+    const struct wl_interface* ffwl_surface_interface;
 } WaylandData;
 
 typedef struct WaylandDisplay
@@ -104,7 +108,15 @@ static void waylandOutputNameListener(void *data, FF_MAYBE_UNUSED struct wl_outp
 
 static void waylandOutputHandler(WaylandData* wldata, struct wl_registry* registry, uint32_t name, uint32_t version)
 {
-    struct wl_proxy* output = wldata->ffwl_proxy_marshal_constructor_versioned((struct wl_proxy*) registry, WL_REGISTRY_BIND, wldata->ffwl_output_interface, version, name, wldata->ffwl_output_interface->name, version, NULL);
+    struct wl_proxy* output = wldata->ffwl_proxy_marshal_constructor_versioned(
+        (struct wl_proxy*) registry,
+        WL_REGISTRY_BIND,
+        wldata->ffwl_output_interface,
+        version,
+        name,
+        wldata->ffwl_output_interface->name,
+        version,
+        NULL);
     if(output == NULL)
         return;
 
@@ -194,12 +206,52 @@ static void waylandOutputHandler(WaylandData* wldata, struct wl_registry* regist
     ffThreadMutexUnlock(&mutex);
 }
 
+static void waylandFractionalScalePreferredScale(void *data, struct wp_fractional_scale_v1 *wp_fractional_scale_v1, uint32_t scale)
+{
+    printf("%f\n", scale / 120.);
+}
+
+static void waylandFractionalScaleManagerHandler(WaylandData* wldata, struct wl_registry* registry, uint32_t name, uint32_t version)
+{
+    struct wl_proxy* fsManager = wldata->ffwl_proxy_marshal_constructor_versioned(
+        (struct wl_proxy*) registry,
+        WL_REGISTRY_BIND,
+        &wp_fractional_scale_manager_v1_interface,
+        version,
+        name,
+        wp_fractional_scale_manager_v1_interface.name,
+        wp_fractional_scale_manager_v1_interface.version,
+        NULL);
+
+    if(fsManager == NULL)
+        return;
+
+    struct wl_proxy* fractionalScale = wldata->ffwl_proxy_marshal_flags(
+        fsManager,
+        WP_FRACTIONAL_SCALE_MANAGER_V1_GET_FRACTIONAL_SCALE,
+        &wp_fractional_scale_v1_interface,
+        version,
+        0,
+        NULL,
+        NULL); // TODO: get an surface
+
+    struct wp_fractional_scale_v1_listener fractionalScaleListener = {
+        .preferred_scale = waylandFractionalScalePreferredScale,
+    };
+
+    wldata->ffwl_proxy_add_listener(fractionalScale, (void(**)(void)) &fractionalScaleListener, wldata);
+    wldata->ffwl_display_roundtrip(wldata->display);
+    wldata->ffwl_proxy_destroy(fsManager);
+}
+
 static void waylandGlobalAddListener(void* data, struct wl_registry* registry, uint32_t name, const char* interface, uint32_t version)
 {
     WaylandData* wldata = data;
 
     if(ffStrEquals(interface, wldata->ffwl_output_interface->name))
         waylandOutputHandler(wldata, registry, name, version);
+    else if(strcmp(interface, wp_fractional_scale_manager_v1_interface.name) == 0)
+        waylandFractionalScaleManagerHandler(wldata, registry, name, version);
 }
 
 bool detectWayland(FFDisplayServerResult* result)
@@ -216,10 +268,14 @@ bool detectWayland(FFDisplayServerResult* result)
     WaylandData data;
 
     FF_LIBRARY_LOAD_SYMBOL_VAR(wayland, data, wl_proxy_marshal_constructor_versioned, false)
+    FF_LIBRARY_LOAD_SYMBOL_VAR(wayland, data, wl_proxy_marshal_flags, false)
     FF_LIBRARY_LOAD_SYMBOL_VAR(wayland, data, wl_proxy_add_listener, false)
     FF_LIBRARY_LOAD_SYMBOL_VAR(wayland, data, wl_proxy_destroy, false)
     FF_LIBRARY_LOAD_SYMBOL_VAR(wayland, data, wl_display_roundtrip, false)
     FF_LIBRARY_LOAD_SYMBOL_VAR(wayland, data, wl_output_interface, false)
+    FF_LIBRARY_LOAD_SYMBOL_VAR(wayland, data, wl_surface_interface, false)
+
+    fractional_scale_v1_types[2] = data.ffwl_surface_interface;
 
     data.display = ffwl_display_connect(NULL);
     if(data.display == NULL)
