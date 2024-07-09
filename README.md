@@ -39,6 +39,7 @@ Some distros packaged an outdated fastfetch version. Older version receive no su
 * NixOS: `nix-shell -p fastfetch`
 * openSUSE: `sudo zypper install fastfetch`
 * ALT Linux: `sudo apt-get install fastfetch`
+* Void Linux: `sudo xbps-install fastfetch`
 
 Replace sudo with doas depending on what you use.
 
